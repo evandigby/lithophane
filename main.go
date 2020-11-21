@@ -1,106 +1,77 @@
 package main
 
 import (
+	"flag"
+	"image/png"
 	"os"
 
 	"github.com/hschendel/stl"
 )
 
-func vec(x, y, z float32) stl.Vec3 {
-	return stl.Vec3{x, y, z}
-}
+var (
+	imageFile        = flag.String("imageFile", "", "Image file to load (png)")
+	outputFile       = flag.String("outputFile", "", "Output file (stl)")
+	minimumThickness = flag.Float64("minthickmm", 0.8, "Minimum thickness in MM")
+	maximumThickness = flag.Float64("maxthickmm", 3.4, "Maximum thickness")
+	maxSizeMMFlag    = flag.Float64("maxmm", 100, "Max size in millimetres")
+	borderWidth      = flag.Float64("borderwidthmm", 4, "Border width in MM")
+	borderDepth      = flag.Float64("borderdepthmm", 0, "Border depth in MM (if zero means same as thickness)")
+	pixelsPerMMFlag  = flag.Int("ppmm", 5, "Pixels per Millimetre")
+)
 
 func main() {
-	const (
-		width  = 25.0
-		height = 25.0
-		depth  = 25.0
-		yMin   = 0
-		yMax   = depth
-		xMin   = 0
-		xMax   = width
-		zMin   = 0
-		zMax   = height
-	)
+	flag.Parse()
 
-	var (
-		frontBottomLeft  = vec(xMin, yMin, zMin)
-		frontBottomRight = vec(xMax, yMin, zMin)
-		frontTopLeft     = vec(xMin, yMin, zMax)
-		frontTopRight    = vec(xMax, yMin, zMax)
-
-		backBottomLeft  = vec(xMin, yMax, zMin)
-		backBottomRight = vec(xMax, yMax, zMin)
-		backTopLeft     = vec(xMin, yMax, zMax)
-		backTopRight    = vec(xMax, yMax, zMax)
-	)
-
-	solid := stl.Solid{
-		Name:    "Cube",
-		IsAscii: true,
-		Triangles: []stl.Triangle{
-			// Bottom
-			{
-				Normal:   vec(0, 0, -1),
-				Vertices: [3]stl.Vec3{backBottomLeft, backBottomRight, frontBottomRight},
-			},
-			{
-				Normal:   vec(0, 0, -1),
-				Vertices: [3]stl.Vec3{frontBottomRight, frontBottomLeft, backBottomLeft},
-			},
-			// Front
-			{
-				Normal:   vec(0, 1, 0),
-				Vertices: [3]stl.Vec3{frontBottomLeft, frontBottomRight, frontTopRight},
-			},
-			{
-				Normal:   vec(0, 1, 0),
-				Vertices: [3]stl.Vec3{frontTopRight, frontTopLeft, frontBottomLeft},
-			},
-			// Back
-			{
-				Normal:   vec(0, -1, 0),
-				Vertices: [3]stl.Vec3{backBottomLeft, backTopLeft, backTopRight},
-			},
-			{
-				Normal:   vec(0, -1, 0),
-				Vertices: [3]stl.Vec3{backTopRight, backBottomRight, backBottomLeft},
-			},
-			// Left
-			{
-				Normal:   vec(-1, 0, 0),
-				Vertices: [3]stl.Vec3{frontBottomLeft, frontTopLeft, backTopLeft},
-			},
-			{
-				Normal:   vec(-1, 0, 0),
-				Vertices: [3]stl.Vec3{backTopLeft, backBottomLeft, frontBottomLeft},
-			},
-			// Right
-			{
-				Normal:   vec(1, 0, 0),
-				Vertices: [3]stl.Vec3{frontBottomRight, backBottomRight, backTopRight},
-			},
-			{
-				Normal:   vec(1, 0, 0),
-				Vertices: [3]stl.Vec3{backTopRight, frontTopRight, frontBottomRight},
-			},
-			// Top
-			{
-				Normal:   vec(0, 0, 1),
-				Vertices: [3]stl.Vec3{frontTopLeft, frontTopRight, backTopRight},
-			},
-			{
-				Normal:   vec(0, 0, 1),
-				Vertices: [3]stl.Vec3{backTopRight, backTopLeft, frontTopLeft},
-			},
-		},
+	pngFile, err := os.Open(*imageFile)
+	if err != nil {
+		panic(err)
 	}
 
-	f, err := os.Create("test.stl")
+	img, err := png.Decode(pngFile)
+	if err != nil {
+		panic(err)
+	}
+
+	imgSize := img.Bounds()
+	deltX := float32(imgSize.Dx())
+	deltY := float32(imgSize.Dy())
+
+	maxSizeMM := float32(*maxSizeMMFlag)
+	pixelsPerMM := float32(*pixelsPerMMFlag)
+
+	wh := maxSizeMM / deltX
+	if deltY > deltX {
+		wh = maxSizeMM / deltY
+	}
+	xyScale := wh * pixelsPerMM
+
+	img = scaleImage(img, xyScale)
+
+	bw := imgToGray(img)
+
+	realWidth := (deltX * xyScale) / pixelsPerMM
+	realHeight := (deltY * xyScale) / pixelsPerMM
+
+	borderThick := *borderDepth
+	if borderThick == 0 {
+		borderThick = *maximumThickness
+	}
+
+	meshTriangles := imgToMesh(bw, float32(*minimumThickness), float32(*maximumThickness), realWidth, realHeight, float32(borderThick), float32(*borderWidth))
+
+	lithophaneFace := stl.Solid{
+		Name:      "Lithophane",
+		IsAscii:   false,
+		Triangles: meshTriangles,
+	}
+
+	lithophaneFace.RecalculateNormals()
+
+	f, err := os.Create(*outputFile)
 	if err != nil {
 		panic(err)
 	}
 	defer f.Close()
 
-	solid.WriteAll(f)
+	lithophaneFace.WriteAll(f)
 }
